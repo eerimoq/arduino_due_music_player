@@ -28,6 +28,6 @@ include $(SIMBA)/make/app.mk
 
 PHONY: convert
 convert:
-	for song in songs/* ; do \
-	    ./music_player.py $$song ; \
+	for song in songs/*.mp3 ; do \
+	    tools/music_player.py $$song ; \
 	done
