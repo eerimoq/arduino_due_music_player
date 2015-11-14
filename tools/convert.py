@@ -56,7 +56,7 @@ class WaveFile(object):
             self.bits_per_sample = struct.unpack("<H", chunk[22:24])[0]
 
             if self.audio_format != 1:
-                raise RuntimeError("Only audio format 1 (PMC) is supported.")
+                raise RuntimeError("Only audio format 1 (PCM) is supported.")
 
             if self.num_channels != 2:
                 raise RuntimeError("Only 2 channels are supported by the music player.")
