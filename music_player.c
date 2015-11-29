@@ -33,8 +33,6 @@
 #define EVENT_STOP        0x4
 #define EVENT_TIMEOUT     0x8
 
-uint32_t samples[4][SAMPLES_MAX];
-
 static int handle_event_play(struct music_player_t *self_p)
 {
     const char *path_p;
@@ -97,7 +95,6 @@ static int handle_event_stop(struct music_player_t *self_p)
 
     case STATE_PLAYING:
     case STATE_PAUSED:
-        std_printf(FSTR("Stopped | %s\r\n"), self_p->path);
         fat16_file_close(&self_p->file);
         self_p->state = STATE_STOPPED;
         break;
@@ -231,7 +228,7 @@ int music_player_start(struct music_player_t *self_p)
 {
     self_p->thrd_p = thrd_spawn((void *(*)(void *))music_player_main,
                                 self_p,
-                                -1,
+                                -30,
                                 self_p->stack,
                                 sizeof(self_p->stack));
     return (self_p->thrd_p == NULL);

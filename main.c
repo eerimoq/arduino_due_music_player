@@ -21,10 +21,19 @@
 #include "simba.h"
 #include "music_player.h"
 
-#define FIRST_SONG_NUMBER     1
+#define FIRST_SONG_NUMBER       1
+
+/* Music player events. */
+#define EVENT_BUTTON_PLAY       0x1
+#define EVENT_BUTTON_NEXT       0x2
+#define EVENT_BUTTON_PREV       0x4
+#define EVENT_BUTTON_STOP       0x8
 
 FS_COMMAND_DEFINE("/list", cmd_list);
 FS_COMMAND_DEFINE("/play", cmd_play);
+FS_COMMAND_DEFINE("/pause", cmd_pause);
+FS_COMMAND_DEFINE("/next", cmd_next);
+FS_COMMAND_DEFINE("/prev", cmd_prev);
 FS_COMMAND_DEFINE("/stop", cmd_stop);
 FS_COMMAND_DEFINE("/repeat", cmd_repeat);
 
@@ -39,8 +48,7 @@ static char qinbuf[32];
 static struct uart_driver_t uart;
 static struct shell_args_t shell_args;
 
-static struct spi_driver_t spi;
-static struct sd_driver_t sd;
+static struct exti_driver_t buttons[4];
 static struct fat16_t fs;
 static struct dac_driver_t dac;
 static struct music_player_t music_player;
@@ -51,6 +59,205 @@ static struct song_t songs[128];
 static struct sem_t sem;
 static long current_song;
 static int repeat = 0;
+static int last_song_number = -1;
+static struct event_t event;
+static THRD_STACK(shell_stack, 1024);
+
+#if defined(MUSIC_PLAYER_STORAGE_SD)
+#    define SAMPLES_PER_SOCOND  22050
+
+static struct spi_driver_t spi;
+static struct sd_driver_t sd;
+
+static int storage_init(fat16_read_t *read_p,
+                        fat16_write_t *write_p,
+                        void **arg_pp)
+{
+    std_printf(FSTR("SD storage.\r\n"));
+
+    std_printf(FSTR("spi bitrate = %lu kbps\r\n"),
+               2 * 16 * SAMPLES_PER_SOCOND / 1024);
+    
+    /* Initialize SPI for the SD card. */
+    spi_init(&spi,
+             &spi_device[0],
+             &pin_d53_dev,
+             SPI_MODE_MASTER,
+             SPI_SPEED_2MBPS,
+             0,
+             1);
+
+    sd_init(&sd, &spi);
+    sd_start(&sd);
+    std_printf(FSTR("sd card started\r\n"));
+
+    *read_p = (fat16_read_t)sd_read_block;
+    *write_p = (fat16_write_t)sd_write_block;
+    *arg_pp = &sd;
+
+    return (0);
+}
+
+#elif defined(MUSIC_PLAYER_STORAGE_USB)
+#    define SAMPLES_PER_SOCOND  44100
+
+static struct usb_host_driver_t usb;
+static struct usb_host_device_t host_devices[1];
+
+static struct usb_host_class_mass_storage_driver_t mass_storage;
+static struct usb_host_class_mass_storage_device_t mass_storage_devices[1];
+
+static ssize_t read_block(void *arg_p,
+                          void *dst_p,
+                          uint32_t src_block)
+{
+    return (usb_host_class_mass_storage_device_read(arg_p,
+                                                    dst_p,
+                                                    512 * src_block,
+                                                    512));
+}
+
+static ssize_t write_block(void *arg_p,
+                           uint32_t dst_block,
+                           const void *src_p)
+{
+    std_printf(FSTR("write block not supported.\r\n"));
+
+    return (-1);
+}
+
+static int storage_init(fat16_read_t *read_p,
+                        fat16_write_t *write_p,
+                        void **arg_pp)
+{
+    struct usb_host_device_t *device_p;
+    union usb_message_t message;
+
+    std_printf(FSTR("USB storage.\r\n"));
+
+    /* Initialize the USB host driver. */
+    usb_host_init(&usb,
+                  &usb_device[0],
+                  host_devices,
+                  membersof(host_devices));
+    
+    usb_host_class_mass_storage_init(&mass_storage,
+                                     &usb,
+                                     mass_storage_devices,
+                                     membersof(mass_storage_devices));
+    usb_host_class_mass_storage_start(&mass_storage);
+    
+    /* Start the USB driver. */
+    usb_host_start(&usb);
+
+    chan_read(&usb.control, &message, sizeof(message));
+
+    std_printf(FSTR("The USB control thread read a message of type %d\r\n"),
+               message.header.type);
+
+    if (message.header.type != USB_MESSAGE_TYPE_ADD) {
+        std_printf(FSTR("bad message type %d\r\n"), message.header.type);
+        return (-1);
+    }
+
+    device_p = usb_host_device_open(&usb, message.add.device);
+
+    *read_p = read_block;
+    *write_p = write_block;
+    *arg_pp = device_p;
+
+    return (0);
+
+}
+#else
+#    error "Unsupported storage type."
+#endif
+
+/**
+ * Button pressed callbacks.
+ */
+static void on_button_play(void *arg_p)
+{
+    uint32_t mask = EVENT_BUTTON_PLAY;
+
+    event_write_irq(&event, &mask, sizeof(mask));
+}
+
+static void on_button_next(void *arg_p)
+{
+    uint32_t mask = EVENT_BUTTON_NEXT;
+
+    event_write_irq(&event, &mask, sizeof(mask));
+}
+
+static void on_button_prev(void *arg_p)
+{
+    uint32_t mask = EVENT_BUTTON_PREV;
+
+    event_write_irq(&event, &mask, sizeof(mask));
+}
+
+static void on_button_stop(void *arg_p)
+{
+    uint32_t mask = EVENT_BUTTON_STOP;
+
+    event_write_irq(&event, &mask, sizeof(mask));
+}
+
+static int next()
+{
+    music_player_song_stop(&music_player);
+
+    /* Increment current song. */
+    sem_get(&sem, NULL);
+    current_song++; 
+
+    if (hash_map_get(&song_map, current_song) == NULL) {
+        current_song = FIRST_SONG_NUMBER;
+    }
+    
+    sem_put(&sem, 1);
+
+    return (music_player_song_play(&music_player));
+}
+
+static int prev()
+{
+    music_player_song_stop(&music_player);
+
+    /* Increment current song. */
+    sem_get(&sem, NULL);
+
+    if (current_song == FIRST_SONG_NUMBER) {
+        current_song = last_song_number;
+    } else {
+        current_song--; 
+    }
+
+    sem_put(&sem, 1);
+
+    return (music_player_song_play(&music_player));
+}
+
+static int handle_event_play()
+{
+    return (music_player_song_play(&music_player));
+}
+
+static int handle_event_next()
+{
+    return (next());
+}
+
+static int handle_event_prev()
+{
+    return (prev());
+}
+
+static int handle_event_stop()
+{
+    return (music_player_song_stop(&music_player));
+}
 
 /**
  * Hash song number.
@@ -182,6 +389,35 @@ int cmd_pause(int argc,
 
     return (music_player_song_pause(&music_player));
 }
+ 
+int cmd_next(int argc,
+             const char *argv[],
+             void *out_p,
+             void *in_p)
+{
+    if (argc != 1) {
+        std_fprintf(out_p, FSTR("Usage: %s\r\n"), argv[0]);
+
+        return (-EINVAL);
+    }
+
+    return (next());
+}
+
+int cmd_prev(int argc,
+             const char *argv[],
+             void *out_p,
+             void *in_p)
+{
+    if (argc != 1) {
+        std_fprintf(out_p, FSTR("Usage: %s\r\n"), argv[0]);
+
+        return (-EINVAL);
+    }
+
+    return (prev());
+}
+
 
 int cmd_stop(int argc,
              const char *argv[],
@@ -220,6 +456,9 @@ static void init(void)
     struct fat16_dir_entry_t entry;
     struct song_t *song_p;
     uint32_t seconds;
+    fat16_read_t read;
+    fat16_write_t write;
+    void * arg_p;
 
     sys_start();
     uart_module_init();
@@ -231,26 +470,52 @@ static void init(void)
 
     std_printf(sys_get_info());
 
-    spi_init(&spi,
-             &spi_device[0],
-             &pin_d53_dev,
-             SPI_MODE_MASTER,
-             SPI_SPEED_1MBPS,
-             0,
-             1);
+    if (storage_init(&read, &write, &arg_p) != 0) {
+        std_printf(FSTR("storage init failed\r\n"));
+        return;
+    }
 
-    sd_init(&sd, &spi);
-    sd_start(&sd);
-    std_printf(FSTR("sd card started\r\n"));
-    fat16_init(&fs, &sd, 0);
+    std_printf(FSTR("initializing fat16\r\n"));
+    fat16_init(&fs, read, write, arg_p, 0);
+    std_printf(FSTR("fat16 initialized\r\n"));
     fat16_start(&fs);
     std_printf(FSTR("fat16 started\r\n"));
+
+    event_init(&event);
+
+    exti_module_init();
+
+    /* Initialize the buttons. */
+    exti_init(&buttons[0],
+              &exti_d18_dev,
+              EXTI_TRIGGER_FALLING_EDGE,
+              on_button_play,
+              NULL);
+    exti_start(&buttons[0]);
+    exti_init(&buttons[1],
+              &exti_d19_dev,
+              EXTI_TRIGGER_FALLING_EDGE,
+              on_button_prev,
+              NULL);
+    exti_start(&buttons[1]);
+    exti_init(&buttons[2],
+              &exti_d20_dev,
+              EXTI_TRIGGER_FALLING_EDGE,
+              on_button_next,
+              NULL);
+    exti_start(&buttons[2]);
+    exti_init(&buttons[3],
+              &exti_d21_dev,
+              EXTI_TRIGGER_FALLING_EDGE,
+              on_button_stop,
+              NULL);
+    exti_start(&buttons[3]);
 
     dac_init(&dac,
              &dac_0_dev,
              &pin_dac0_dev,
              &pin_dac1_dev,
-             2 * 11025);
+             2 * SAMPLES_PER_SOCOND);
 
     hash_map_init(&song_map,
                   buckets,
@@ -287,15 +552,17 @@ static void init(void)
             continue;
         }
 
-        std_printf("Adding song %s to playlist.\r\n", entry.name);
         song_p = &songs[number - FIRST_SONG_NUMBER];
 
         /* Initialize the song entry. */
         song_p->number = number;
         strcpy(song_p->name, entry.name);
-        seconds = (entry.size / 2 / 11025);
+        seconds = (entry.size / 4 / SAMPLES_PER_SOCOND);
         song_p->minutes = (seconds / 60);
         song_p->seconds = (seconds % 60);
+
+        std_printf("Adding song %s to playlist.\r\n",
+                   entry.name);
 
         hash_map_add(&song_map, number, song_p);
         number++;
@@ -303,18 +570,51 @@ static void init(void)
 
     fat16_dir_close(&dir);
 
+    last_song_number = (number - 1);
+
     music_player_start(&music_player);
 }
 
 int main()
 {
+    uint32_t mask;
+
     init();
 
+    /* Spawn the shell. */
     shell_args.chin_p = &uart.chin;
     shell_args.chout_p = &uart.chout;
     shell_args.username_p = NULL;
     shell_args.password_p = NULL;
-    shell_entry(&shell_args);
+    thrd_spawn(shell_entry,
+               &shell_args,
+               0,
+               shell_stack,
+               sizeof(shell_stack));
+
+    while (1) {
+        mask = (EVENT_BUTTON_PLAY
+                | EVENT_BUTTON_NEXT
+                | EVENT_BUTTON_PREV
+                | EVENT_BUTTON_STOP);
+        event_read(&event, &mask, sizeof(mask));
+
+        if (mask & EVENT_BUTTON_PLAY) {
+            handle_event_play();
+        }
+
+        if (mask & EVENT_BUTTON_NEXT) {
+            handle_event_next();
+        }
+
+        if (mask & EVENT_BUTTON_PREV) {
+            handle_event_prev();
+        }
+
+        if (mask & EVENT_BUTTON_STOP) {
+            handle_event_stop();
+        }
+    }
 
     return (0);
 }

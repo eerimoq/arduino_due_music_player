@@ -134,7 +134,8 @@ if __name__ == "__main__":
         print "Using sox to create a wav file from given mp3 file."
         mp3path = path
         path = path[:-4] + ".wav"
-        cmd = ["sox", "-b", "16", mp3path, path, "rate", "11025", "channels", "2"]
+        cmd = ["sox", "-b", "16", mp3path, path, "rate", "22050", "channels", "2"]
+        print ' '.join(cmd)
         subprocess.check_call(cmd)
 
     wave_file = WaveFile(path)

@@ -23,11 +23,11 @@ BOARD = arduino_due
 VERSION = 1.0.0
 SRC += music_player.c
 
+CFLAGS_EXTRA = -DMUSIC_PLAYER_STORAGE_USB -DLOG_BUFFER_SIZE=2048
+
 SIMBA = ../simba
 include $(SIMBA)/make/app.mk
 
 PHONY: convert
 convert:
-	for song in songs/*.mp3 ; do \
-	    tools/convert.py $$song ; \
-	done
+	tools/convert.py songs/mamma.mp3
