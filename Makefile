@@ -28,6 +28,10 @@ CFLAGS_EXTRA = -DMUSIC_PLAYER_STORAGE_USB -DLOG_BUFFER_SIZE=2048
 SIMBA = ../simba
 include $(SIMBA)/make/app.mk
 
+SONGS = $(shell ls songs/*.mp3)
+
 PHONY: convert
 convert:
-	tools/convert.py songs/mamma.mp3
+	for song in $(SONGS) ; do \
+	    tools/convert.py $$song ; \
+	done

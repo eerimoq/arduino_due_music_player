@@ -134,7 +134,7 @@ if __name__ == "__main__":
         print "Using sox to create a wav file from given mp3 file."
         mp3path = path
         path = path[:-4] + ".wav"
-        cmd = ["sox", "-b", "16", mp3path, path, "rate", "22050", "channels", "2"]
+        cmd = ["sox", "-b", "16", mp3path, path, "rate", "44100", "channels", "2"]
         print ' '.join(cmd)
         subprocess.check_call(cmd)
 
@@ -143,8 +143,8 @@ if __name__ == "__main__":
     print wave_file
 
     # convert all samples to 12 bits, suitable for Arduino Due DAC
-    print "Creating " + path + ".b12"
-    with open(path + ".b12", "wb") as f:
+    print "Creating " + path + ".b44"
+    with open(path + ".b44", "wb") as f:
         for ch0, ch1 in wave_file.samples():
             if wave_file.bits_per_sample == 8:
                 # Upconvert the sample from 8 to 12 bits by shifting

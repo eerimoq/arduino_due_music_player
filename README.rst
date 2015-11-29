@@ -42,3 +42,8 @@ CONVERTINGS SONGS
 All mp3-files in the folder songs can be converted to the .b12-format
 with the command 'make convert'. Copy the creted .b12 files to a SD
 card and insert it into the music player.
+
+PREREQUISITES
+=============
+
+    sudo apt-get install sox libsox-fmt-mp3
