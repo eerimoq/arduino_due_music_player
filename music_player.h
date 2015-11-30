@@ -29,6 +29,7 @@ typedef const char *(*song_path_t)(void *arg_p);
 
 struct music_player_t {
     int state;
+    uint32_t down_sampling_mask;
     struct event_t event;
     struct timer_t timer;
     struct fat16_t *fat16_p;
@@ -106,3 +107,11 @@ int music_player_song_pause(struct music_player_t *self_p);
  * @return zero(0) or negative error code.
  */
 int music_player_song_stop(struct music_player_t *self_p);
+
+/**
+ * Set the number of bits per sample.
+
+ * @return zero(0) or negative error code.
+ */
+int music_player_set_bits_per_sample(struct music_player_t *self_p,
+                                     int value);

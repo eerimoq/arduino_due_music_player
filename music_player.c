@@ -116,6 +116,7 @@ static int play_chunk(struct music_player_t *self_p)
     const char *path_p;
     uint32_t *buf_p;
     size_t size;
+    int i;
 
     /* Read samples from the file. */
     buf_p = self_p->samples.buf[self_p->samples.index];
@@ -125,8 +126,15 @@ static int play_chunk(struct music_player_t *self_p)
                            buf_p,
                            sizeof(self_p->samples.buf[0]));
 
+    /* Optional down sampling of the read samples. */
+    if (self_p->down_sampling_mask != 0xfffffffful) {
+        for (i = 0; i < size / 4; i++) {
+            buf_p[i] &= self_p->down_sampling_mask;
+        }
+    }
+
     if (size > 0) {
-        /* Add samples to DAC convertion. */
+        /* Add samples for DAC convertion. */
         dac_async_convert(self_p->dac_p, buf_p, size / 4);
     } else {
         /* Start playing the next file in the queue. */
@@ -212,6 +220,7 @@ int music_player_init(struct music_player_t *self_p,
                       void *arg_p)
 {
     self_p->state = STATE_IDLE;
+    self_p->down_sampling_mask = 0xfffffffful;
     self_p->fat16_p = fat16_p;
     self_p->dac_p = dac_p;
     self_p->samples.index = 0;
@@ -231,6 +240,7 @@ int music_player_start(struct music_player_t *self_p)
                                 -30,
                                 self_p->stack,
                                 sizeof(self_p->stack));
+
     return (self_p->thrd_p == NULL);
 }
 
@@ -265,6 +275,21 @@ int music_player_song_stop(struct music_player_t *self_p)
 
     mask = EVENT_STOP;
     event_write(&self_p->event, &mask, sizeof(mask));
+
+    return (0);
+}
+
+int music_player_set_bits_per_sample(struct music_player_t *self_p,
+                                     int value)
+{
+    uint16_t mask;
+
+    value = (12 - value);
+    mask = ~((1 << value) - 1);
+
+    self_p->down_sampling_mask = (((uint32_t)mask << 16) | mask);
+
+    LOG(INFO, "down_sampling_mask = 0x%lx\r\n", self_p->down_sampling_mask);
 
     return (0);
 }

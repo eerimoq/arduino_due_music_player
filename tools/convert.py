@@ -143,8 +143,9 @@ if __name__ == "__main__":
     print wave_file
 
     # convert all samples to 12 bits, suitable for Arduino Due DAC
-    print "Creating " + path + ".b44"
-    with open(path + ".b44", "wb") as f:
+    path_b44 = path[:-4] + ".b44"
+    print "Creating " + path_b44
+    with open(path_b44, "wb") as f:
         for ch0, ch1 in wave_file.samples():
             if wave_file.bits_per_sample == 8:
                 # Upconvert the sample from 8 to 12 bits by shifting

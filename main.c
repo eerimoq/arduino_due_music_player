@@ -36,6 +36,7 @@ FS_COMMAND_DEFINE("/next", cmd_next);
 FS_COMMAND_DEFINE("/prev", cmd_prev);
 FS_COMMAND_DEFINE("/stop", cmd_stop);
 FS_COMMAND_DEFINE("/repeat", cmd_repeat);
+FS_COMMAND_DEFINE("/set_bits_per_sample", cmd_set_bits_per_sample);
 
 struct song_t {
     int number;
@@ -77,7 +78,7 @@ static int storage_init(fat16_read_t *read_p,
 
     std_printf(FSTR("spi bitrate = %lu kbps\r\n"),
                2 * 16 * SAMPLES_PER_SOCOND / 1024);
-    
+
     /* Initialize SPI for the SD card. */
     spi_init(&spi,
              &spi_device[0],
@@ -140,13 +141,13 @@ static int storage_init(fat16_read_t *read_p,
                   &usb_device[0],
                   host_devices,
                   membersof(host_devices));
-    
+
     usb_host_class_mass_storage_init(&mass_storage,
                                      &usb,
                                      mass_storage_devices,
                                      membersof(mass_storage_devices));
     usb_host_class_mass_storage_start(&mass_storage);
-    
+
     /* Start the USB driver. */
     usb_host_start(&usb);
 
@@ -210,12 +211,12 @@ static int next()
 
     /* Increment current song. */
     sem_get(&sem, NULL);
-    current_song++; 
+    current_song++;
 
     if (hash_map_get(&song_map, current_song) == NULL) {
         current_song = FIRST_SONG_NUMBER;
     }
-    
+
     sem_put(&sem, 1);
 
     return (music_player_song_play(&music_player));
@@ -231,7 +232,7 @@ static int prev()
     if (current_song == FIRST_SONG_NUMBER) {
         current_song = last_song_number;
     } else {
-        current_song--; 
+        current_song--;
     }
 
     sem_put(&sem, 1);
@@ -389,7 +390,7 @@ int cmd_pause(int argc,
 
     return (music_player_song_pause(&music_player));
 }
- 
+
 int cmd_next(int argc,
              const char *argv[],
              void *out_p,
@@ -447,6 +448,38 @@ int cmd_repeat(int argc,
     repeat ^= 1;
 
     return (0);
+}
+
+int cmd_set_bits_per_sample(int argc,
+                            const char *argv[],
+                            void *out_p,
+                            void *in_p)
+{
+    long bits_per_sample;
+
+    if (argc != 2) {
+        std_fprintf(out_p, FSTR("Usage: %s <number of bits>\r\n"),
+                    argv[0]);
+
+        return (-EINVAL);
+    }
+
+    if (std_strtol(argv[1], &bits_per_sample) != 0) {
+        std_fprintf(out_p, FSTR("Usage: %s <number of bits>\r\n"),
+                    argv[0]);
+
+        return (-EINVAL);
+    }
+
+    if ((bits_per_sample < 0) || (bits_per_sample > 12)) {
+        std_printf(FSTR("The number of bits per sample bust be "
+                        "an interger from 0 to 12.\r\n"));
+
+        return (-EINVAL);
+    }
+
+    return (music_player_set_bits_per_sample(&music_player,
+                                             bits_per_sample));
 }
 
 static void init(void)
